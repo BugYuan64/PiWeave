@@ -78,9 +78,8 @@ test("malformed review JSON stops the run without a repair call", async () => {
 		"```json\n{\"approved\":true,\"feedback\":[]}\n```",
 		'{"approved":"false","feedback":[]}',
 		'{"approved":false}',
-		'{"approved":false,"feedback":[],"extra":1}',
 		'{"approved":false,"feedback":[]}',
-		'{"approved":true,"feedback":["x"]}',
+		'{"approved":true,"feedback":[{"note":"x"}]}',
 	]) {
 		const executor = new FakeExecutor((request) =>
 			request.role === "writer" ? completed(DRAFT_1) : completed(text),
@@ -94,6 +93,20 @@ test("malformed review JSON stops the run without a repair call", async () => {
 		assert.equal(result.review, null);
 		assert.match(result.error ?? "", /Reviewer output|review/i);
 	}
+});
+
+test("an approval with non-blocking notes still counts as approved", async () => {
+	const executor = new FakeExecutor((request) =>
+		request.role === "writer"
+			? completed(DRAFT_1)
+			: completed('{"approved":true,"feedback":["可以补一个例子"],"confidence":"high"}'),
+	);
+
+	const result = await runTask(TASK, executor);
+
+	assert.equal(result.status, "completed");
+	assert.deepEqual(result.review, { approved: true, feedback: ["可以补一个例子"] });
+	assert.deepEqual(executor.roles(), ["writer", "reviewer"], "no revision was requested");
 });
 
 test("executor failure stops downstream roles", async () => {
@@ -184,6 +197,9 @@ test("a thrown executor error is reported as execution_failed", async () => {
 	assert.equal(result.status, "execution_failed");
 	assert.match(result.error ?? "", /threw: boom/);
 	assert.equal(executor.calls.length, 1);
+	assert.equal(result.attempts.length, 1, "the thrown call is still recorded");
+	assert.equal(result.attempts[0]?.role, "writer");
+	assert.equal(result.attempts[0]?.status, "failed");
 });
 
 test("parseReview rejects non-boolean approved and non-string feedback", () => {

@@ -1,6 +1,7 @@
-import { SettingsManager } from "@earendil-works/pi-coding-agent";
+import { loadDotEnv } from "./env.js";
 import type { Executor, RunResult, RunStatus } from "./model.js";
 import { PiExecutor, createPiSessionFactory, type PiModelSelection } from "./executor.js";
+import { resolveEndpoint } from "./provider.js";
 import { runTask, type OrchestratorOptions } from "./service.js";
 
 /** Exit codes for the documented final statuses, plus CLI usage errors. */
@@ -25,27 +26,19 @@ export interface CliIo {
 
 const USAGE = `Usage: piweave run "<task>"
 
-Environment:
-  PIWEAVE_PROVIDER  Pi provider id (default: Pi's configured default provider)
-  PIWEAVE_MODEL     Pi model id (default: Pi's configured default model)`;
+Configuration comes from the environment or a git-ignored .env in the working directory:
+  PIWEAVE_BASE_URL  OpenAI-compatible endpoint, for example https://your-endpoint.example/v1
+  PIWEAVE_API_KEY   API key for that endpoint
+  PIWEAVE_MODEL     Model id, for example your-model-id`;
 
 /**
- * Resolve the provider/model. Explicit environment settings win; otherwise use the
- * defaults Pi itself has configured. The CLI never picks a model on its own.
+ * Resolve the endpoint from the environment (a .env loaded by `main` shows up there).
+ * No endpoint, key, or model is defaulted in code, so nothing sensitive is committed;
+ * missing variables fail with the exact names. Nothing falls back to a Pi login, OAuth
+ * credential, or user-level model configuration.
  */
 export function selectModel(env: NodeJS.ProcessEnv = process.env): PiModelSelection {
-	const provider = env["PIWEAVE_PROVIDER"]?.trim();
-	const modelId = env["PIWEAVE_MODEL"]?.trim();
-	if (provider !== undefined && provider !== "" && modelId !== undefined && modelId !== "") {
-		return { provider, modelId };
-	}
-	const settings = SettingsManager.create(process.cwd());
-	const resolvedProvider = provider !== undefined && provider !== "" ? provider : settings.getDefaultProvider();
-	const resolvedModel = modelId !== undefined && modelId !== "" ? modelId : settings.getDefaultModel();
-	if (resolvedProvider === undefined || resolvedModel === undefined) {
-		throw new Error("No model configured. Set PIWEAVE_PROVIDER and PIWEAVE_MODEL, or configure a default in Pi.");
-	}
-	return { provider: resolvedProvider, modelId: resolvedModel };
+	return resolveEndpoint(env);
 }
 
 async function createRealExecutor(onCleanupTimeout: () => void): Promise<Executor> {
@@ -126,6 +119,8 @@ export async function runCli(argv: readonly string[], io: CliIo = {}): Promise<n
 
 /** Entry point: wire SIGINT, run, and return the status code. */
 export async function main(argv: readonly string[] = process.argv.slice(2)): Promise<number> {
+	// Real environment variables win; a missing .env is fine and reported per variable later.
+	loadDotEnv();
 	const controller = new AbortController();
 	let interrupted = false;
 	const onSigint = (): void => {
@@ -149,14 +144,25 @@ function isEntryPoint(path: string | undefined): boolean {
 	return path !== undefined && /(?:^|[\\/])cli\.(?:ts|js)$/u.test(path);
 }
 
+/**
+ * Ends the process after stdout has flushed. The final JSON is the only machine interface,
+ * and stdout writes are asynchronous when it is a pipe, so calling process.exit() directly
+ * can truncate it. The timer only matters when a session that failed to abort keeps a
+ * handle open; it is unref'd so a drained event loop still exits by itself.
+ */
+function exitAfterFlush(code: number): void {
+	process.exitCode = code;
+	setTimeout(() => process.exit(code), 1_000).unref();
+}
+
 if (isEntryPoint(process.argv[1])) {
 	main().then(
 		(code) => {
-			process.exit(code);
+			exitAfterFlush(code);
 		},
 		(error: unknown) => {
 			process.stderr.write(`${error instanceof Error ? (error.stack ?? error.message) : String(error)}\n`);
-			process.exit(EXIT_CODES.execution_failed);
+			exitAfterFlush(EXIT_CODES.execution_failed);
 		},
 	);
 }

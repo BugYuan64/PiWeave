@@ -8,6 +8,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import type { AgentRequest, AgentResult, Executor, Role, Usage } from "./model.js";
 import { SYSTEM_PROMPTS, buildAgentPrompt } from "./prompts.js";
+import { registerEndpoint, type ModelEndpoint } from "./provider.js";
 
 export const DEFAULT_MAX_OUTPUT_CHARS = 12_000;
 export const DEFAULT_CLEANUP_GRACE_MS = 5_000;
@@ -152,14 +153,16 @@ export class PiExecutor implements Executor {
 			);
 
 			const outcome = await Promise.race([promptOutcome, interruptPromise.then(() => null)]);
-			if (outcome === null || interruption !== null) {
-				const reason: Interruption = interruption ?? "cancelled";
-				return await this.#settleInterruption(session, promptStarted, request.role, options.timeoutMs, reason);
+			// The prompt settled, so keep its result even if the timer fired in the same tick;
+			// only a user cancellation discards a reply that already arrived.
+			if (outcome !== null && interruption !== "cancelled") {
+				if (outcome.kind === "rejected") {
+					return failedResult(`Role ${request.role} failed: ${errorText(outcome.error)}`);
+				}
+				return this.#resultFromSession(request.role, session, lastAssistant);
 			}
-			if (outcome.kind === "rejected") {
-				return failedResult(`Role ${request.role} failed: ${errorText(outcome.error)}`);
-			}
-			return this.#resultFromSession(request.role, session, lastAssistant);
+			const reason: Interruption = interruption ?? "cancelled";
+			return await this.#settleInterruption(session, promptStarted, request.role, options.timeoutMs, reason);
 		} catch (error) {
 			if (interruption !== null) {
 				if (session === undefined) {
@@ -274,28 +277,24 @@ function createControlledResourceLoader(systemPrompt: string): ResourceLoader {
 	};
 }
 
-export interface PiModelSelection {
-	provider: string;
-	modelId: string;
-}
+/** The endpoint the CLI resolved; aliased for callers that only know the old name. */
+export type PiModelSelection = ModelEndpoint;
 
 /**
- * Builds the real SDK session factory used by the CLI. Each `create` call uses
- * in-memory session and settings managers, an empty tool set, and a resource loader
- * that returns no extensions, skills, prompts, themes, or project context files.
+ * Builds the real SDK session factory used by the CLI. The project endpoint is
+ * registered on a fresh model runtime with no user `models.json`, so the only
+ * reachable model is the one named here; no OAuth or subscription provider is used.
+ * Each `create` call uses in-memory session and settings managers, an empty tool set,
+ * and a resource loader that returns no extensions, skills, prompts, themes, or
+ * project context files.
  */
 export async function createPiSessionFactory(
 	selection: PiModelSelection,
 	options: { cwd?: string } = {},
 ): Promise<SessionFactory> {
 	const cwd = options.cwd ?? process.cwd();
-	const modelRuntime = await ModelRuntime.create();
-	const model = modelRuntime.getModel(selection.provider, selection.modelId);
-	if (!model) {
-		throw new Error(
-			`Unknown model "${selection.provider}/${selection.modelId}". Set PIWEAVE_PROVIDER and PIWEAVE_MODEL to a model that Pi has configured.`,
-		);
-	}
+	const modelRuntime = await ModelRuntime.create({ modelsPath: null });
+	const model = registerEndpoint(modelRuntime, selection);
 	return {
 		async create({ systemPrompt }) {
 			const { session } = await createAgentSession({

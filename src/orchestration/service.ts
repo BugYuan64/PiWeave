@@ -65,7 +65,8 @@ export async function runTask(
 		error,
 	});
 
-	const stop = (status: RunStatus, error: string): never => {
+	// The explicit variable type lets TypeScript treat calls to `stop` as terminating.
+	const stop: (status: RunStatus, error: string) => never = (status, error) => {
 		throw new StopRun(finish(status, error));
 	};
 
@@ -86,8 +87,13 @@ export async function runTask(
 			);
 		} catch (error) {
 			const reason = error instanceof Error ? error.message : String(error);
+			attempts.push({
+				role: request.role,
+				status: "failed",
+				elapsedMs: Math.round(performance.now() - callStart),
+				usage: null,
+			});
 			stop("execution_failed", `Role ${request.role} threw: ${reason}`);
-			throw error;
 		}
 		attempts.push({
 			role: request.role,

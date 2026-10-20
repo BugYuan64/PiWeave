@@ -9,7 +9,7 @@
   },
   "scripts": {
     "check": "tsc --project tsconfig.check.json",
-    "test": "node --import tsx --test tests/orchestration.test.ts tests/executor.test.ts tests/cli.test.ts",
+    "test": "node --import tsx --test tests/orchestration.test.ts tests/executor.test.ts tests/cli.test.ts tests/provider.test.ts",
     "build": "tsc --project tsconfig.json",
     "dev": "tsx src/orchestration/cli.ts",
     "start": "node dist/cli.js",

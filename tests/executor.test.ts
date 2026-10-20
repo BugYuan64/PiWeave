@@ -226,6 +226,25 @@ test("a session factory failure becomes failed", async () => {
 	assert.match(result.error ?? "", /cannot create session/);
 });
 
+test("a timeout during session creation never prompts and still disposes", async () => {
+	const session = new FakeSession({ text: "too late", final: { stopReason: "stop" } });
+	const factory: SessionFactory = {
+		create: async () => {
+			await new Promise((resolve) => setTimeout(resolve, 30));
+			return session;
+		},
+	};
+
+	const result = await new PiExecutor(factory, { cleanupGraceMs: 10 }).execute(WRITER_REQUEST, {
+		timeoutMs: 5,
+	});
+
+	assert.equal(result.status, "timed_out");
+	assert.equal(session.prompts.length, 0, "no prompt was sent");
+	assert.equal(session.abortCalls, 0, "nothing to abort before the prompt started");
+	assert.equal(session.disposeCalls, 1, "the late session is still disposed");
+});
+
 test("a timeout aborts the session and reports timed_out", async () => {
 	const session = new FakeSession({ run: () => new Promise<void>(() => {}) });
 	const executor = new PiExecutor(new FakeFactory(() => session), { cleanupGraceMs: 50 });

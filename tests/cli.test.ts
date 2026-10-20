@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { SettingsManager } from "@earendil-works/pi-coding-agent";
 import { EXIT_CODES, runCli, selectModel } from "../src/orchestration/cli.js";
 import type { AgentResult, Executor } from "../src/orchestration/model.js";
+import { PROVIDER_ID } from "../src/orchestration/provider.js";
 import { FakeExecutor, completed, reviewJson } from "./fakes.js";
 
 interface Captured {
@@ -56,8 +56,9 @@ test("completed writes one JSON document to stdout and exits 0", async () => {
 	assert.equal(result["draft"], "draft");
 	assert.notEqual(result["runId"], "");
 	assert.equal(typeof result["elapsedMs"], "number");
-	assert.deepEqual(result["attempts"], result["attempts"]);
-	assert.equal(Array.isArray(result["attempts"]), true);
+	const attempts = result["attempts"] as Array<Record<string, unknown>>;
+	assert.deepEqual(attempts.map((attempt) => attempt["role"]), ["writer", "reviewer"]);
+	assert.deepEqual(attempts.map((attempt) => attempt["status"]), ["completed", "completed"]);
 	// Progress lives on stderr, never stdout.
 	assert.doesNotMatch(stdout, /starting|result:/);
 	assert.match(stderr, /writer: starting/);
@@ -152,23 +153,29 @@ test("a missing or empty task is a usage error", async () => {
 	}
 });
 
-test("selectModel prefers explicit environment settings", () => {
-	const selection = selectModel({ PIWEAVE_PROVIDER: "openai", PIWEAVE_MODEL: "gpt-test" });
-	assert.deepEqual(selection, { provider: "openai", modelId: "gpt-test" });
+test("selectModel reads the endpoint from the environment", () => {
+	const selection = selectModel({
+		PIWEAVE_BASE_URL: "http://127.0.0.1:9999/v1",
+		PIWEAVE_API_KEY: "another-key",
+		PIWEAVE_MODEL: "glm-5.3",
+	});
+
+	assert.deepEqual(selection, {
+		providerId: PROVIDER_ID,
+		baseUrl: "http://127.0.0.1:9999/v1",
+		apiKey: "another-key",
+		modelId: "glm-5.3",
+	});
 });
 
-test("selectModel completes a partial environment pair from Pi's defaults", () => {
-	const configured = SettingsManager.create(process.cwd()).getDefaultProvider();
-	if (configured === undefined) {
-		assert.throws(() => selectModel({ PIWEAVE_MODEL: "gpt-env" }), /No model configured/);
-		return;
-	}
-	const selection = selectModel({ PIWEAVE_MODEL: "gpt-env" });
-	assert.equal(selection.provider, configured);
-	assert.equal(selection.modelId, "gpt-env");
+test("selectModel names the variables that are still missing", () => {
+	assert.throws(
+		() => selectModel({}),
+		/PIWEAVE_BASE_URL, PIWEAVE_API_KEY, PIWEAVE_MODEL/,
+	);
 });
 
-test("the CLI leaves an orchestrator exception as a single failure document", async () => {
+test("an executor exception becomes one failure document", async () => {
 	const { io, read } = capture();
 	const code = await runCli(["run", "task"], {
 		...io,
@@ -183,4 +190,7 @@ test("the CLI leaves an orchestrator exception as a single failure document", as
 	const result = parseSingleJson(read().stdout) as Record<string, unknown>;
 	assert.equal(result["status"], "execution_failed");
 	assert.match(String(result["error"]), /unexpected/);
+	const attempts = result["attempts"] as Array<Record<string, unknown>>;
+	assert.equal(attempts.length, 1, "the thrown call is still reported");
+	assert.equal(attempts[0]?.["status"], "failed");
 });

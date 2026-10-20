@@ -9,7 +9,7 @@ export const REVIEWER_SYSTEM_PROMPT = `You are the Reviewer role in a two-role o
 Judge whether the draft answers the original task correctly and completely.
 You have no tools. Reply with exactly one JSON object and nothing else:
 {"approved": <boolean>, "feedback": [<string>, ...]}
-Use approved=false with at least one concrete feedback item when the draft needs work, and approved=true with an empty feedback array otherwise.`;
+Use approved=false with at least one concrete feedback item when the draft needs work. When the draft is acceptable use approved=true; feedback may then hold optional non-blocking notes, or stay empty.`;
 
 const MAX_FEEDBACK_ITEMS = 20;
 
@@ -55,10 +55,8 @@ export function parseReview(text: string): Review {
 	if (typeof value !== "object" || value === null || Array.isArray(value)) {
 		throw new Error("Reviewer output must be a JSON object");
 	}
+	// Unknown fields are ignored: a stray note must not fail an otherwise valid review.
 	const record = value as Record<string, unknown>;
-	const keys = Object.keys(record);
-	const extra = keys.filter((key) => key !== "approved" && key !== "feedback");
-	if (extra.length > 0) throw new Error(`Reviewer output has unexpected fields: ${extra.join(", ")}`);
 	const approved = record["approved"];
 	const feedback = record["feedback"];
 	if (typeof approved !== "boolean") throw new Error("Reviewer output field 'approved' must be a boolean");
@@ -67,9 +65,6 @@ export function parseReview(text: string): Review {
 	}
 	if (feedback.length > MAX_FEEDBACK_ITEMS) {
 		throw new Error(`Reviewer output has more than ${MAX_FEEDBACK_ITEMS} feedback items`);
-	}
-	if (approved && feedback.length > 0) {
-		throw new Error("Reviewer output approved the draft but also returned feedback");
 	}
 	if (!approved && feedback.length === 0) {
 		throw new Error("Reviewer output rejected the draft without any feedback");

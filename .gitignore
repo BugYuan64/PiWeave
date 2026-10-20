@@ -4,3 +4,5 @@ dist/
 .env.*
 !.env.example
 .superpowers/
+# Local Pi project settings; PiWeave reads .env instead.
+.pi/

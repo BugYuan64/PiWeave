@@ -8,6 +8,7 @@
   },
   "include": [
     "src/orchestration/**/*.ts",
-    "tests/**/*.ts"
+    "tests/**/*.ts",
+    "scripts/**/*.ts"
   ]
 }
